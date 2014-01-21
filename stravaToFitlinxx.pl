@@ -3,9 +3,9 @@
 ## Get Data from Strava dump and write it to fitlinxx
 ##
 ## Jeremy Hubble 6/19/2013
+##               1/19/2014
 ##
 ## Todo: Use Strava API (when available)
-##       Improve fitlinxx login process
 ##       Support other types of workouts (not just biking)
 ##
 
@@ -14,9 +14,10 @@ use HTTP::Cookies;
 use HTTP::Request::Common qw{ POST GET };
 use Data::Dumper;
 use LWP::DebugFile qw(+);
-use LWP::Debug qw(+ conns);;
+use LWP::Debug qw(+ conns);
+my $debug = 0;
 
-my ($infile,$username,$password, $weight) = @ARGV ;
+my ($userid,$password, $infile, $weight) = @ARGV ;
 
 $weight = 170 unless ($weight);
 
@@ -44,52 +45,83 @@ sub logWorkout {
         my $url = "https://www.fitlinxx.com/workout/LogCardio2.asp";
         $request = POST( $url, $workout);
         $ua->prepare_request($request);
-#       print "REQ:".$request->as_string."\n\n";
+        $debug && print "REQ:".$request->as_string."\n\n";
         my $response = $ua->send_request($request);
         my $content = $response->as_string();
+        $debug && print "RESULT:",$content,"\n";
 
 
-} 
+}
 
 sub loginToFitlinxx {
+
+        ## Go through the whole login process
+        ## Some might be skipped, but this makes sure we get all cookies
         my ($userid, $password) = @_;
         my $ua = LWP::UserAgent->new( );
         my $cookie_jar = HTTP::Cookies->new( );
         $ua->cookie_jar( $cookie_jar );
+
+        ## Lets be firefox
         $ua->agent('Mozilla/5.0 (Windows NT 6.1; WOW64; rv:21.0) Gecko/20100101 Firefox/21.0');
 
-        my $request = GET('https://www.fitlinxx.com/login-pub.html');
+        ## Main login page
+        my $request = GET('https://flxpro.fitlinxx.com/Login.aspx');
         $ua->prepare_request($request);
-#       print "REQ:".$request->as_string."\n\n";
         $response = $ua->send_request($request);
-        my $content = $response->as_string();
-#       print "CONTENT:$content\n";
 
-        my $url = 'https://www.fitlinxx.com/verifpwd.asp';
-        my $params = ['targetURL' => '/workout/default.asp',
-                        'password' => $password,
-                        'username' => $userid,
-                        'image1.x' => 36,
-                        'image1.y' => 18
+        ## extract some form variables
+        my $content = $response->as_string;
+        $content =~ m/name="__VIEWSTATE".*?value="(.*?)"/ms;
+        my $viewstate = $1;
+
+        $content =~ m/name="__EVENTVALIDATION".*?value="(.*?)"/ms;
+        my $eventvalidation = $1;
+
+
+        ## post form
+        my $url = 'https://flxpro.fitlinxx.com/Login.aspx';
+        my $params = [
+                        'id_userpassword' => $password,
+                        'id_username' => $userid,
+                        '__VIEWSTATE' => $viewstate,
+                        '__EVENTTARGET' => 'id_btnLogMeIn',
+                        '__EVENTARGUMENT' => '',
+                        '__EVENTVALIDATION' => $eventvalidation
         ] ;
 
+        $debug && print "POSTING FORM DATA:",Dumper($params);
         $request = POST( $url, $params);
         $ua->prepare_request($request);
-#       print "REQ:".$request->as_string."\n\n";
+
+        ## Response should have redirect to a page that does the login
         my $response = $ua->send_request($request);
         my $content = $response->as_string();
 
-#       print "CONTENT:$content\n";
+        $debug && print "CONTENT FROM INITIAL LOGIN REQUEST:",$content,"\n";
 
-        ## Do login twice to get cookies
-        ## (It seems to need google analytics or asp cookies)
+        $content =~ m/Location:(.*$)/m;
 
-        $ua->prepare_request($request);
-#       print "REQ:".$request->as_string."\n\n";
-        my $response = $ua->send_request($request);
-        my $content = $response->as_string();
+        my $location = $1;
+        $debug && print "Found Locaiton:",$location, "\n";
 
-#       print "CONTENT:$content\n";
+        ## If we have redirect, post that
+        if ($location) {
+                $debug && print "Redirecting...\n";
+                my $response = $ua->get($location);
+                my $content = $response->as_string();
+                $debug && print "REDIRECTED PAGE CONTENT:$content\n";
+        }
+
+        ## if we don't have redirect we may be in trouble
+        else {
+                print STDERR "no login redirect, probably login error\n";
+        }
+
+
+
+        ## now we have all cookies set for valid logged in user agent
+        ## we can go to other pages
 
         return $ua;
 }
@@ -99,19 +131,13 @@ sub loginToFitlinxx {
 
 
 
-
-
-
-
-
-
 sub readStravaData {
         my @updates;
         my ($file) = @_;
-        open FILE, $file || die "unable to open file: $file\n";
+        open FILE, $file or die "unable to open file: $file\n";
 
         my %dates;
-        while (<>) {
+        while (<FILE>) {
                 chomp;
                 my @stuff = split (/\t/,$_);
                 next unless ($stuff[2] && $stuff[4] && $stuff[5]);
@@ -123,7 +149,7 @@ sub readStravaData {
                 my @time = split(/:/,$stuff[4]);
                 my $tm = $time[0]*60*60 + $time[1]*60  + $time[2];
 
-        #       print "$dt\t$tm\t$dst\n";
+               $debug && print "$dt\t$tm\t$dst\n";
 
 
                 if (exists $dates{$dt}) {
@@ -234,8 +260,7 @@ sub getUpdateRequest {
                         ($time/60);
         $formParams{'calories'} = sprintf("%.2f",$calories);
 
-        #use Data::Dumper;
-        #print Dumper(\%formParams);
+        $debug && print Dumper(\%formParams);
         return \%formParams;
 }
 
