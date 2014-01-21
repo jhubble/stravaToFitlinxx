@@ -161,7 +161,7 @@ sub loginToFitlinxx {
                         '__EVENTVALIDATION' => $eventvalidation
         ] ;
 
-        $debug && print "POSTING FORM DATA:",Data::Dumper($params);
+        $debug && print "POSTING FORM DATA:",Dumper($params);
         $request = POST( $url, $params);
         $ua->prepare_request($request);
 
